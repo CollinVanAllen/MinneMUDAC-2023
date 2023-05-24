@@ -1,0 +1,124 @@
+---
+title: "MinneMUDAC"
+author: "PlatteVillians"
+date: "2023-03-05"
+output: html_document
+---
+UPDATED AT 2:00 PM MARCH 5TH
+
+## Libraries and Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(corrplot)
+library(tidyverse)
+library(lubridate)
+library(data.table)
+#library(baseballr)
+```
+
+## Reading in Data
+```{r data, include=FALSE}
+sched23 <- read_csv("2023_MLBSchedule.csv")
+scheds <- read_csv("OriginalSchedules.csv", 
+                   locale = locale(encoding = "UTF-16"))
+logs <- read_csv("GameLogs.csv", 
+                locale = locale(encoding = "UTF-16"))
+```
+
+## Cleaning the Data
+
+### Changing Date Format
+```{r date}
+logs$Date <- ymd(logs$Date)
+logs$Year <- year(logs$Date)
+logs$Month <- month(logs$Date)
+```
+
+### Adding Position
+```{r position}
+logs_pos <- logs %>% mutate_at(vars(contains("_Position")),
+                               funs(case_when(.=="1"~"Pitcher",
+                                              .=="2"~"Catcher",
+                                              .=="3"~"First",
+                                              .=="4"~"Second",
+                                              .=="5"~"Third",
+                                              .=="6"~"Short",
+                                              .=="7"~"Left",
+                                              .=="8"~"Center",
+                                              .=="9"~"Right")))
+```
+```{r}
+# Convert numeric month to abbreviations
+logs$Month <- month.abb[logs$Month]
+```
+
+### Dealing with NA
+```{r NA}
+na_count <- sapply(logs, function(y) sum(length(which(is.na(y)))))
+
+na_count <- data.frame(na_count)
+
+clean_logs <- logs %>% select(-c(Forfeit_Information, Protest_Information, LFUmp_ID, RFUmp_ID, Completition_Information, Additional_Information, SavingPitcher_ID))
+```
+
+### Removing games affected by tradgedy
+```{r tradgedy}
+# Removing rest of games for 2001 post 9/11 (Not sure how necessary this portion is)
+  # Removes 281 entries
+clean_logs <- clean_logs %>% filter(!between(Date, '2001-09-15', '2001-12-31'))
+# Removing games post Covid pre-June 2021 (Looks like low attendance, then rises in June)
+  # Removes about 1895 entries
+clean_logs <- clean_logs %>% filter(!between(Date, '2020-03-15', '2021-06-15'))
+# Removing games with 0 attendance?
+  # Removes 1180 entries
+clean_logs <- clean_logs %>% filter(Attendance > 0)
+```
+
+### Creating dataset for just MN
+```{r MN}
+mn_logs <- clean_logs %>% filter(HomeTeam == "MIN")
+```
+
+
+## Attendence Graphs
+```{r}
+# All teams
+clean_logs %>% ggplot() + geom_histogram(aes(x = clean_logs$Attendance))
+clean_logs %>% ggplot() + geom_boxplot(aes(x = Attendance))
+summary(clean_logs$Attendance)
+
+# Just MIN
+mn_logs %>% ggplot() + geom_histogram(aes(x = Attendance))
+mn_logs %>% ggplot() + geom_boxplot(aes(x = Attendance))
+summary(mn_logs$Attendance)
+```
+```{r}
+clean_logs %>% filter(HomeTeam == "MIN") %>% ggplot(aes(y = Attendance,x=Date)) +
+  geom_point() + geom_line() + facet_wrap(~DayNight)
+
+clean_logs %>% ggplot(aes(y = Attendance, x = Year, group = Year)) +
+  geom_boxplot() + 
+  geom_smooth(se=FALSE, color="red", aes(group=1)) +
+  facet_wrap(~HomeTeam)
+
+clean_logs %>% filter(HomeTeam == "MIN") %>%  ggplot(aes(Attendance, fill = DayNight)) +
+  geom_histogram() + facet_wrap(~DayofWeek + DayNight)
+
+mn_logs %>% group_by(Year) %>% summarise(average = mean(Attendance)) %>%  ggplot(aes(y = average, x = Year)) +geom_line() + geom_point()
+mn_logs %>% group_by(Month) %>% summarise(average = mean(Attendance)) %>%  ggplot(aes(y = average, x = Month)) +geom_line() + geom_point()
+mn_logs %>% group_by(DayofWeek,DayNight) %>% summarise(average = mean(Attendance)) %>%  ggplot(aes(y = average, x = DayofWeek, color = DayNight)) +geom_line() + geom_point()
+mn_logs %>% group_by(DayNight,DayofWeek) %>% summarise(average = mean(Attendance)) %>%  ggplot(aes(y = average, x = DayNight, color = DayofWeek)) + geom_point()
+mn_logs %>%  ggplot(aes(y = Attendance, group = Month)) +geom_boxplot() + xlab("Month")
+```
+
+## Corrolation Plots
+```{r}
+mn_numeric <- mn_logs[,sapply(mn_logs, is.numeric)] %>% filter(!is.na(Attendance))
+
+mn_cor <- data.frame(cor(mn_numeric))
+
+mn_cor <- min_cor %>% 
+
+corrplot(mn_cor, tl.cex = 0.5)
+```

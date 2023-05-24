@@ -1,0 +1,81 @@
+---
+title: "MinneMUDAC"
+author: "PlatteVillians"
+date: "2023-02-27"
+output: html_document
+---
+
+UPDATED WITH OFFICIAL 2:00 PM MARCH 5TH
+
+## Libraries and Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(corrplot)
+library(tidyverse)
+library(lubridate)
+library(data.table)
+```
+
+## Reading in Data
+```{r data, include=FALSE}
+sched23 <- read_csv("2023_MLBSchedule.csv")
+scheds <- read_csv("OriginalSchedules.csv", 
+                   locale = locale(encoding = "UTF-16"))
+logs <- read_csv("GameLogs.csv", 
+                locale = locale(encoding = "UTF-16"))
+```
+
+## Cleaning the Data
+
+### Changing Date Format
+```{r date}
+logs$Date <- ymd(logs$Date)
+logs$Year <- year(logs$Date)
+
+clean_logs %>% ggplot(aes(x = BallParkID)) + geom_bar()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+LocationCounts <- logs %>% count(BallParkID, HomeTeam)
+
+
+```
+
+### Adding Position
+```{r position}
+logs <- logs %>% mutate_at(vars(contains("_Position")),
+                               funs(case_when(.=="1"~"Pitcher",
+                                              .=="2"~"Catcher",
+                                              .=="3"~"First",
+                                              .=="4"~"Second",
+                                              .=="5"~"Third",
+                                              .=="6"~"Short",
+                                              .=="7"~"Left",
+                                              .=="8"~"Center",
+                                              .=="9"~"Right")))
+```
+
+### Dealing with NA
+```{r NA}
+na_count <- sapply(logs, function(y) sum(length(which(is.na(y)))))
+
+na_count <- data.frame(na_count)
+
+clean_logs <- logs %>% select(-c(Forfeit_Information, Protest_Information, LFUmp_ID, RFUmp_ID, Completition_Information, Additional_Information, SavingPitcher_ID))
+```
+
+### Removing games affected by tradgedy
+```{r tradgedy}
+# Removing rest of games for 2001 post 9/11 (Not sure how necessary this portion is)
+  # Removes 281 entries
+clean_logs <- clean_logs %>% filter(!between(Date, '2001-09-15', '2001-12-31'))
+# Removing games post Covid pre-June 2021 (Looks like low attendance, then rises in June)
+  # Removes about 1895 entries
+clean_logs <- clean_logs %>% filter(!between(Date, '2020-03-15', '2021-06-15'))
+```
+
+### Creating dataset for just MN
+```{r MN}
+MN_logs <- clean_logs %>% filter(HomeTeam == "MIN")
+```
+
+
+

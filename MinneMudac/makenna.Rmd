@@ -1,0 +1,693 @@
+---
+title: "MinneMUDAC"
+author: "Makenna Halvensleben"
+date: '2023-02-27'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(corrplot)
+library(lubridate)
+library(data.table)
+library(tidymodels)
+library(ranger)
+```
+
+# Reading in data
+
+```{r}
+sched23 <- read_csv("2023_MLBSchedule.csv")
+scheds <- read_csv("OriginalSchedules.csv",
+                   col_types = cols(DateofMakeup = col_character()),
+                   locale = locale(encoding = "UTF-16LE"))
+logs <- read_csv("GameLogs.csv", 
+                 col_types = cols(Completition_Information = col_character(), 
+                                  Forfeit_Information = col_character(), 
+                                  Protest_Information = col_character(),
+                                  LFUmp_ID = col_character(),
+                                  RFUmp_ID = col_character(),
+                                  Additional_Information = col_character()), 
+                 locale = locale(encoding = "UTF-16LE"))
+
+
+logs$Date <- ymd(logs$Date)
+logs$Year <- year(logs$Date)
+
+logs <- logs %>% mutate_at(vars(contains("_Position")),
+                               funs(case_when(.=="1"~"Pitcher",
+                                              .=="2"~"Catcher",
+                                              .=="3"~"First",
+                                              .=="4"~"Second",
+                                              .=="5"~"Third",
+                                              .=="6"~"Short",
+                                              .=="7"~"Left",
+                                              .=="8"~"Center",
+                                              .=="9"~"Right")))
+```
+
+# Dealing with NA
+
+Factors with mostly NA values are removed from the data set
+
+```{r}
+na_count <- sapply(logs, function(y) sum(length(which(is.na(y)))))
+
+na_count <- data.frame(na_count)
+
+clean_logs <- logs %>% select(-c(Forfeit_Information, Protest_Information, LFUmp_ID, RFUmp_ID, Completition_Information, Additional_Information, SavingPitcher_ID))
+```
+
+# Dealing with 0 Attendance
+
+Entries with 0 or negative attendance are removed from the data set
+
+```{r}
+nrow(clean_logs[which(clean_logs$Attendance <= 0),])
+clean_logs <- clean_logs %>% filter(Attendance > 0)
+```
+
+# Creating data frame with just MIN data
+
+```{r}
+min_logs <- clean_logs %>% filter(HomeTeam == "MIN")
+```
+
+# Looking at Attendance distribution
+
+## Just MIN
+
+```{r}
+min_logs %>% ggplot() + geom_histogram(aes(x = Attendance)) + xlab("Attendance for MN Twins") + theme_bw()
+min_logs %>% ggplot() + geom_boxplot(aes(x = Attendance))
+summary(min_logs$Attendance)
+```
+
+## All Teams
+
+```{r}
+clean_logs %>% ggplot() + geom_histogram(aes(x = clean_logs$Attendance)) + xlab("Attendance for All Teams") + theme_bw()
+clean_logs %>% ggplot() + geom_boxplot(aes(x = Attendance))
+summary(clean_logs$Attendance)
+```
+
+# Identifying important factors
+
+## Just MIN
+
+### Corrplot with top 5 negative correlation and top 5 positive correlation
+
+Correlation plots are only valid for numeric factors, so only those are considered.
+
+Correlation plot is organized so that the 5 factors with the greatest positive correlation are listed first followed by the 5 factors with the greatest negative correlation.
+
+```{r}
+min_numeric <- min_logs[,sapply(min_logs, is.numeric)]
+min_cor <- cor(min_numeric)
+min_order <- min_cor[order(min_cor[,"Attendance"]),]
+min_names <- row.names(min_order)
+min_cor_top10 <- min_numeric %>% select(c(min_names[c(1:5,60:65)])) %>% rev() %>% cor()
+corrplot(min_cor_top10, tl.cex = 0.5, type="full", method = "color")
+```
+
+#### Bar plots of important factors
+
+```{r}
+min_logs %>% ggplot() + geom_bar(aes(x = VisitingTeamGameNumber, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = HomeTeamGameNumber, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = HomeTeamDefense_Assists, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = VisitingTeamDefense_Assists, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = Year, y = Attendance), stat="identity")
+
+min_logs %>% ggplot() + geom_bar(aes(x = VisitingTeamOffense_Strickouts, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = VisitingTeamOffense_AwardedFirstonCatcherInterference, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = VisitingTeamPitchers_PitchersUsed, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = VisitingTeamOffense_Homeruns, y = Attendance), stat="identity")
+min_logs %>% ggplot() + geom_bar(aes(x = HomeTeamOffense_AwardedFirstonCatcherInterference, y = Attendance), stat="identity")
+```
+
+### Stepwise Model
+
+```{r echo=FALSE}
+min.null <- lm(Attendance ~ .,data=min_numeric)
+min.step <- stats::step(min.null)
+```
+```{r}
+summary(min.step)
+```
+
+## All MLB Teams
+
+### Corrplot with top 5 negative correlation and top 5 positive correlation
+
+Correlation plots are only valid for numeric factors, so only those are considered.
+
+Correlation plot is organized so that the 5 factors with the greatest positive correlation are listed first followed by the 5 factors with the greatest negative correlation.
+
+```{r}
+all_numeric <- clean_logs[,sapply(clean_logs, is.numeric)]
+all_cor <- cor(all_numeric)
+all_order <- all_cor[order(all_cor[,"Attendance"]),]
+all_names <- row.names(all_order)
+all_cor_top10 <- all_numeric %>% select(c(all_names[c(1:5,60:65)])) %>% rev() %>% cor()
+corrplot(all_cor_top10, tl.cex = 0.7, type = "full", method = "color")
+```
+
+#### Bar plots of important factors
+
+```{r}
+clean_logs %>% ggplot() + geom_bar(aes(x = VisitingTeamGameNumber, y = Attendance), stat="identity")
+clean_logs %>% ggplot() + geom_bar(aes(x = HomeTeamGameNumber, y = Attendance), stat="identity")
+clean_logs %>% ggplot() + geom_bar(aes(x = LengthofGame, y = Attendance), stat="identity")
+clean_logs %>% ggplot() + geom_bar(aes(x = HomeTeamOffense_SacrificeHits, y = Attendance), stat="identity")
+clean_logs %>% ggplot() + geom_bar(aes(x = HomeTeamOffense_IntentionalWalks, y = Attendance), stat="identity")
+
+clean_logs %>% ggplot() + geom_bar(aes(x = Year, y = Attendance), stat="identity")
+clean_logs %>% ggplot() + geom_bar(aes(x = NumberofGames, y = Attendance), stat="identity")
+clean_logs %>% ggplot() + geom_bar(aes(x = HomeTeamOffense_Strickouts, y = Attendance), stat="identity")
+clean_logs %>% ggplot() + geom_bar(aes(x = HomeTeamPitchers_WildPitches, y = Attendance), stat="identity")
+# spelled visiting wrong
+clean_logs %>% ggplot() + geom_bar(aes(x = VistingTeamScore, y = Attendance), stat="identity")
+```
+
+## Stepwise Model
+
+```{r echo = FALSE}
+all.null <- lm(Attendance ~ .,data=all_numeric)
+all.step <- stats::step(all.null)
+```
+```{r}
+summary(all.step)
+```
+
+# Predicting attendance for all teams using random forest
+
+## Using all of the available factors
+
+### Splitting data into training and testing
+
+```{r}
+set.seed(1234)
+
+attendance_split <- clean_logs %>%
+  initial_split(strata = HomeTeam)
+
+train <- training(attendance_split)
+train <- na.omit(train)
+train <- train %>% mutate_if(is.factor, as.character)
+test <- testing(attendance_split)
+test <- na.omit(test)
+test <- test %>% mutate_if(is.factor, as.character)
+
+test$isTest <- rep(1,nrow(test))
+train$isTest <- rep(0,nrow(train))
+fullSet <- rbind(test,train)
+fullSet <- fullSet %>% mutate_if(is.character, as.factor)
+test.new <- fullSet[fullSet$isTest==1,]
+train.new <- fullSet[fullSet$isTest==0,]
+
+rf_spec_ranger <- rand_forest(mode = "regression") %>%
+  set_engine("ranger")
+```
+
+### Fitting random forest model
+
+```{r}
+rf_fit <- rf_spec_ranger %>%
+  fit(Attendance ~ .,
+    data = train.new
+  )
+
+rf_fit
+```
+
+### Predicting with training and testing data
+
+```{r}
+pred <- rf_fit %>% predict(new_data = test.new)
+pred
+
+results_train <- rf_fit %>%
+    predict(new_data = train.new) %>%
+    mutate(
+      truth = train.new$Attendance,
+      model = "rf"
+    )
+
+results_test <- rf_fit %>%
+    predict(new_data = test.new) %>%
+    mutate(
+      truth = test.new$Attendance,
+      model = "rf"
+    )
+
+results_train %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test %>%
+  mutate(train = "testing") %>%
+  bind_rows(results_train %>%
+    mutate(train = "training")) %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+
+results_test %>%
+  mutate(train = "testing") %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+```
+
+## Using just the factors that can be deduced from the 2023 schedule data
+
+### Splitting data into training and testing
+
+```{r}
+clean_logs_known <- clean_logs %>% select(Date, DayofWeek, VisitingTeam, VisitingTeamLeague, VisitingTeamGameNumber, HomeTeam, HomeTeamLeague, HomeTeamGameNumber, DayNight, BallParkID, Year, Attendance)
+
+attendance_split_known <- clean_logs_known %>%
+  initial_split(strata = HomeTeam)
+
+train_known <- training(attendance_split_known)
+train_known <- na.omit(train_known)
+train_known <- train_known %>% mutate_if(is.factor, as.character)
+test_known <- testing(attendance_split_known)
+test_known <- na.omit(test_known)
+test_known <- test_known %>% mutate_if(is.factor, as.character)
+
+test_known$isTest <- rep(1,nrow(test_known))
+train_known$isTest <- rep(0,nrow(train_known))
+fullSet_known <- rbind(test_known,train_known)
+fullSet_known <- fullSet_known %>% mutate_if(is.character, as.factor)
+test.new_known <- fullSet_known[fullSet_known$isTest==1,]
+train.new_known <- fullSet_known[fullSet_known$isTest==0,]
+```
+
+### Fitting random forest model
+
+```{r}
+rf_fit_known <- rf_spec_ranger %>%
+  fit(Attendance ~ .,
+    data = train.new_known
+  )
+
+rf_fit_known
+```
+
+### Predicting with training and testing data
+
+```{r}
+pred_known <- rf_fit_known %>% predict(new_data = test.new_known)
+pred_known
+
+
+results_train_known <- rf_fit_known %>%
+    predict(new_data = train.new_known) %>%
+    mutate(
+      truth = train.new_known$Attendance,
+      model = "rf"
+    )
+
+results_test_known <- rf_fit_known %>%
+    predict(new_data = test.new_known) %>%
+    mutate(
+      truth = test.new_known$Attendance,
+      model = "rf"
+    )
+
+results_train_known %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test_known %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test_known %>%
+  mutate(train = "testing") %>%
+  bind_rows(results_train_known %>%
+    mutate(train = "training")) %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+
+results_test_known %>%
+  mutate(train = "testing") %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+```
+
+### Adding factors that can be deduced to the 2023 schedule data set
+
+Rare stadiums are removed from the data set. These include Estadio Alfredo Harp Helu, London Stadium, and Muncy Bank Ballpark.
+
+```{r}
+sched23$Date <- ymd(sched23$game_date)
+sched23$Year <- year(sched23$Date)
+sched23$DayofWeek <- wday(sched23$Date)
+sched23$DayofWeek <- case_when(
+  sched23$DayofWeek==1~"Mon",
+  sched23$DayofWeek==2~"Tue",
+  sched23$DayofWeek==3~"Wed",
+  sched23$DayofWeek==4~"Thu",
+  sched23$DayofWeek==5~"Fri",
+  sched23$DayofWeek==6~"Sat",
+  sched23$DayofWeek==7~"Sun")
+sched23$HomeTeam <- sched23$home_team
+sched23$VisitingTeam <- sched23$away_team
+sched23$DayNight <- ifelse(sched23$game_time < hms("17:00:00"), "D", "N")
+sched23$VisitingTeamLeague <- ""
+sched23$HomeTeamLeague <- ""
+sched23$VisitingTeamGameNumber <- 0
+sched23$HomeTeamGameNumber <- 0
+
+sched23 <- sched23 %>% filter(stadium_name != "Estadio Alfredo Harp Helu", stadium_name != "London Stadium", stadium_name != "Muncy Bank Ballpark")
+
+sched23$BallParkID <- case_when(
+  sched23$HomeTeam=="ANA"~"ANA01",
+  sched23$HomeTeam=="ARI"~"PHO01",
+  sched23$HomeTeam=="ATL"~"ATL03",
+  sched23$HomeTeam=="BAL"~"BAL12",
+  sched23$HomeTeam=="BOS"~"BOS07",
+  sched23$HomeTeam=="CHA"~"CHI12",
+  sched23$HomeTeam=="CHN"~"CHI11",
+  sched23$HomeTeam=="CIN"~"CIN09",
+  sched23$HomeTeam=="CLE"~"CLE08",
+  sched23$HomeTeam=="COL"~"DEN02",
+  sched23$HomeTeam=="DET"~"DET05",
+  sched23$HomeTeam=="HOU"~"HOU03",
+  sched23$HomeTeam=="KCA"~"KAN06",
+  sched23$HomeTeam=="LAN"~"LOS03",
+  sched23$HomeTeam=="MIA"~"MIA02",
+  sched23$HomeTeam=="MIL"~"MIL06",
+  sched23$HomeTeam=="MIN"~"MIN04",
+  sched23$HomeTeam=="NYA"~"NYC21",
+  sched23$HomeTeam=="NYN"~"NYC20",
+  sched23$HomeTeam=="OAK"~"OAK01",
+  sched23$HomeTeam=="PHI"~"PHI13",
+  sched23$HomeTeam=="PIT"~"PIT08",
+  sched23$HomeTeam=="SDN"~"SAN02",
+  sched23$HomeTeam=="SEA"~"SEA03",
+  sched23$HomeTeam=="SFN"~"SFO03",
+  sched23$HomeTeam=="SLN"~"STL10",
+  sched23$HomeTeam=="TBA"~"STP01",
+  sched23$HomeTeam=="TEX"~"ARL03",
+  sched23$HomeTeam=="TOR"~"TOR02",
+  sched23$HomeTeam=="WAS"~"WAS11")
+
+for (x in 1:2425) {
+  sched23[x,]$VisitingTeamLeague <- logs[which(logs$VisitingTeam == sched23[x,]$VisitingTeam),][1,]$VisitingTeamLeague
+  sched23[x,]$HomeTeamLeague <- logs[which(logs$HomeTeam == sched23[x,]$HomeTeam),][1,]$HomeTeamLeague
+}
+
+sched23 <- sched23 %>% mutate_if(is.character, as.factor)
+
+gameNumbers <- as.data.frame(matrix(nrow=30, ncol=2))
+gameNumbers$V1 <- unique(sched23$HomeTeam)
+gameNumbers$V2 <- 1
+
+for (x in 1:2425) {
+  visiting <- gameNumbers[which(gameNumbers$V1 == sched23[x,]$VisitingTeam),]$V2
+  home <- gameNumbers[which(gameNumbers$V1 == sched23[x,]$HomeTeam),]$V2
+  sched23[x,]$VisitingTeamGameNumber <- visiting
+  sched23[x,]$HomeTeamGameNumber <- home
+  gameNumbers[which(gameNumbers$V1 == sched23[x,]$VisitingTeam),]$V2 <- visiting + 1
+  gameNumbers[which(gameNumbers$V1 == sched23[x,]$HomeTeam),]$V2 <- home + 1
+}
+
+sched23$isTest <- 0
+```
+
+### Predicting with 2023 schedule data
+
+```{r}
+pred_sched23 <- rf_fit_known %>% predict(new_data = sched23)
+pred_sched23
+
+sched23$pred <- pred_sched23$.pred
+```
+
+## Using all data to train random forest when predicting for 2023 schedule
+
+### Fitting random forest model
+
+```{r}
+rf_fit_all_data <- rf_spec_ranger %>%
+  fit(Attendance ~ .,
+    data = clean_logs_known
+  )
+
+rf_fit_all_data
+```
+
+### Predicting with 2023 schedule
+
+```{r}
+pred_sched23_all <- rf_fit_all_data %>% predict(new_data = sched23)
+pred_sched23_all
+
+sched23$pred_all <- pred_sched23_all$.pred
+```
+
+## Comparing predictions
+
+```{r}
+pred_sched23 %>% ggplot() + geom_histogram(aes(x = .pred))
+summary(pred_sched23$.pred)
+pred_sched23_all %>% ggplot() + geom_histogram(aes(x = .pred))
+summary(pred_sched23_all$.pred)
+```
+
+# Predicting attendance for all teams using linear regression
+
+```{r}
+clean_logs_linear <- clean_logs %>% select(Date, DayofWeek, VisitingTeam, VisitingTeamLeague, VisitingTeamGameNumber, HomeTeam, HomeTeamLeague, HomeTeamGameNumber, DayNight, Year, Attendance)
+
+attendance_split_linear <- clean_logs_linear %>%
+  initial_split(strata = HomeTeam)
+
+train_linear <- training(attendance_split_linear)
+train_linear <- na.omit(train_linear)
+train_linear <- train_linear %>% mutate_if(is.factor, as.character)
+test_linear <- testing(attendance_split_linear)
+test_linear <- na.omit(test_linear)
+test_linear <- test_linear %>% mutate_if(is.factor, as.character)
+
+test_linear$isTest <- rep(1,nrow(test_linear))
+train_linear$isTest <- rep(0,nrow(train_linear))
+fullSet_linear <- rbind(test_linear,train_linear)
+fullSet_linear <- fullSet_linear %>% mutate_if(is.character, as.factor)
+test.new_linear <- fullSet_linear[fullSet_linear$isTest==1,]
+train.new_linear <- fullSet_linear[fullSet_linear$isTest==0,]
+
+lm_spec <- linear_reg(mode = "regression") %>%
+  set_engine("glm")
+
+lm_fit <- lm_spec %>%
+  fit(Attendance ~ .,
+    data = train.new_linear
+  )
+
+lm_fit
+
+predlm <- lm_fit %>% predict(new_data = test.new_linear)
+predlm
+
+results_train_linear <- lm_fit %>%
+    predict(new_data = train.new_linear) %>%
+    mutate(
+      truth = train.new_linear$Attendance,
+      model = "lm"
+    )
+
+results_test_linear <- lm_fit %>%
+    predict(new_data = test.new_linear) %>%
+    mutate(
+      truth = test.new_linear$Attendance,
+      model = "lm"
+    )
+
+results_train_linear %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test_linear %>%
+  group_by(model) %>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test_linear %>%
+  mutate(train = "testing") %>%
+  bind_rows(results_train_linear %>%
+    mutate(train = "training")) %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+
+results_test_linear %>%
+  mutate(train = "testing") %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+
+summary(lm_fit$fit)
+
+```
+
+## Comparing random forest with linear regression
+
+```{r}
+results_train_compare <- lm_fit %>%
+  predict(new_data = train.new_linear) %>%
+  mutate(
+    truth = train.new_linear$Attendance,
+    model = "lm"
+  ) %>%
+  bind_rows(rf_fit_known %>%
+    predict(new_data = train.new_known) %>%
+    mutate(
+      truth = train.new_known$Attendance,
+      model = "rf"
+    ))
+
+results_test_compare <- lm_fit %>%
+  predict(new_data = test.new_linear) %>%
+  mutate(
+    truth = test.new_linear$Attendance,
+    model = "lm"
+  ) %>%
+  bind_rows(rf_fit_known %>%
+    predict(new_data = test.new_known) %>%
+    mutate(
+      truth = test.new_known$Attendance,
+      model = "rf"
+    ))
+
+results_test_compare %>%
+  mutate(train = "testing") %>%
+  bind_rows(results_train_compare %>%
+    mutate(train = "training")) %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+
+results_test_compare %>%
+  mutate(train = "testing") %>%
+  ggplot(aes(truth, .pred, color = model)) +
+  geom_abline(lty = 2, color = "gray80", size = 2) +
+  geom_point(alpha = 0.5) +
+  facet_wrap(~train) +
+  labs(
+    x = "Truth",
+    y = "Predicted attendance",
+    color = "Type of model"
+  ) + theme_bw(base_size = 15)
+```
+
+## Metrics
+
+```{r}
+rf_fit_known
+rf_fit_all_data
+summary(lm_fit$fit)
+glance(lm_fit)
+```
+
+## Writing to csv
+
+```{r}
+write.csv(sched23, "sched23pred.csv")
+```
+
+# Various Notes
+
+summary
+
+residuals
+
+confusion matrix
+
+post hoc analysis of random forest model
+
+
+1 lm     regression
+2 glm    regression
+3 glmnet regression
+4 stan   regression
+5 spark  regression
+6 keras  regression
+7 brulee regression
+
+
+coefficient
+
+confint
+
+relevel
+
+glm
+
+Look at categorical variables?????
+
+Random Forrest
+
+https://www.listendata.com/2014/11/random-forest-with-r.html#:~:text=Yes%2C%20it%20can%20be%20used,numeric%20or%20continuous%20dependent%20variable. 
+
+Gradient Boosting Tree
+
+https://www.projectpro.io/recipes/apply-gradient-boosting-r-for-regression
+
+look at the one lady's code
+
+association
+
+https://stackoverflow.com/questions/52554336/plot-the-equivalent-of-correlation-matrix-for-factors-categorical-data-and-mi
